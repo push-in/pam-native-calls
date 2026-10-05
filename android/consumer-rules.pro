@@ -1,0 +1,2 @@
+-keep class dev.pam.calls.CallsModule { <init>(android.content.Context); }
+-keep class dev.pam.calls.CallsInitializer { <init>(); }
