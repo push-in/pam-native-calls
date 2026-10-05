@@ -150,6 +150,23 @@ $test('readiness maps native capability flags', static function () use ($check):
     NativeTestHarness::uninstall();
 });
 
+$test('voipToken returns the iOS PushKit token or null', static function () use ($check): void {
+    $transport = NativeTestHarness::install();
+    $transport->succeed('calls', 'voipToken', ['token' => 'abcdef', 'provider' => 3]);
+    $token = 'unset';
+    Calls::voipToken(static function (?string $value) use (&$token): void {
+        $token = $value;
+    });
+    $check($token === 'abcdef', 'token');
+    NativeTestHarness::uninstall();
+});
+
+$test('ios surfaces use CallKit and PushKit VoIP', static function () use ($check): void {
+    $source = (string) file_get_contents(dirname(__DIR__).'/ios/Sources/CallsModule.swift');
+    $check(str_contains($source, 'reportNewIncomingCall') && str_contains($source, 'CXEndCallAction'), 'CallKit');
+    $check(str_contains($source, 'desiredPushTypes = [.voIP]') && str_contains($source, 'reportAndEnd'), 'PushKit');
+});
+
 $test('android surfaces use CallStyle, full-screen intents and a camera|microphone service', static function () use ($check): void {
     $root = dirname(__DIR__).'/android/src/main';
     $notifier = (string) file_get_contents($root.'/kotlin/dev/pam/calls/CallNotifier.kt');

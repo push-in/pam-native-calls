@@ -17,8 +17,24 @@ applications — the part of a calling app that must work while PHP is suspended
 - **Lock screen** — after Accept, and while a call is ongoing, the app's
   activities show over the lock screen and turn the screen on.
 
-Android API 26+. iOS (CallKit/PushKit) is not shipped in 0.1: calls fail with a
-typed message and `readiness()` reports `false`.
+Android API 26+ and iOS 15+.
+
+On iOS the same API drives **CallKit** and **PushKit**: incoming calls ring
+with the system call UI (lock screen included), Accept/Decline/HangUp come
+from `CXProviderDelegate` and are queued exactly like Android actions, ongoing
+calls (including outgoing calls started in the app) are registered with
+CallKit, and `Calls::fromPush()` mappings are evaluated natively for **VoIP
+pushes** so the phone rings while PHP is suspended or the app was killed.
+Send iOS call pushes through APNs VoIP (`apns-push-type: voip`) to the token
+from `Calls::voipToken()`; iOS requires every VoIP push to report a call, so
+unmatched or "ended" pushes report a call that ends immediately. The plugin
+declares the `voip`, `audio` and `remote-notification` background modes and
+the `aps-environment` entitlement. CallKit owns the ringtone and the
+full-screen UI (`readiness()` reports `true` unless the device region is
+mainland China, where CallKit is unavailable). When combining with
+`pam-native-webrtc`, start call audio after CallKit posts
+`Notification.Name.pamCallAudioActivated`. The iOS implementation has not been
+validated on a device yet; see `ios/Tests/CallsTests.swift`.
 
 ## Install
 
@@ -97,6 +113,14 @@ Calls::fromPush(
         ->timeout(45),
 );
 ```
+
+## iOS VoIP token
+
+```php
+Calls::voipToken(fn (?string $token) => $token && $this->api->registerVoip($token));
+```
+
+`null` on Android (ring from FCM data pushes) and until iOS issues a token.
 
 ## Readiness
 

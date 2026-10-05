@@ -2,7 +2,7 @@
     "name": "pushinbr/pam-native-calls",
     "description": "System call surfaces for PAM Native: CallStyle incoming and ongoing notifications, lock-screen call UI, call actions and push-driven ringing.",
     "type": "pam-native-plugin",
-    "keywords": ["pam-native", "calls", "callstyle", "voip", "push", "android"],
+    "keywords": ["pam-native", "calls", "callstyle", "callkit", "pushkit", "voip", "push", "android", "ios"],
     "license": "Apache-2.0",
     "require": {
         "php": "^8.5",

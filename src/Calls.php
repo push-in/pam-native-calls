@@ -95,6 +95,20 @@ final class Calls
         });
     }
 
+    /**
+     * iOS PushKit VoIP token (hex) for your call-push server, or null on
+     * Android (ring from FCM data pushes with fromPush()) and before iOS issued one.
+     *
+     * @param Closure(?string): void $done
+     */
+    public static function voipToken(Closure $done): void
+    {
+        NativeModules::call(self::MODULE, 'voipToken', [], static function (NativeModuleResult $result) use ($done): void {
+            $token = $result->succeeded() ? ($result->values()['token'] ?? null) : null;
+            $done(is_string($token) && $token !== '' ? $token : null);
+        });
+    }
+
     /** Opens the Android 14+ "full screen notifications" setting (notification settings on older versions). */
     public static function openFullScreenSettings(): void
     {

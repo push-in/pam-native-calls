@@ -43,7 +43,14 @@
         "minimumVersion": "15.0",
         "sourceDirs": [
             "ios/Sources"
-        ]
+        ],
+        "frameworks": [
+            "CallKit",
+            "PushKit",
+            "AVFoundation"
+        ],
+        "entitlements": "ios/Calls.entitlements",
+        "infoPlist": "ios/Info.plist"
     },
     "idl": "pam-native.idl.json",
     "modules": [
