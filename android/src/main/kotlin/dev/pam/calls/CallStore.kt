@@ -54,13 +54,18 @@ data class CallInfo(
     }
 }
 
-/** SharedPreferences-backed state: calls, queued actions, push mappings and the lock-screen flag. */
+/** SharedPreferences-backed state: calls, queued actions, push mappings, ended calls and the lock-screen flag. */
 object CallStore {
     private const val PREFS = "dev.pam.calls"
     private const val KEY_CALLS = "calls"
     private const val KEY_ACTIONS = "actions"
     private const val KEY_MAPPINGS = "mappings"
+    private const val KEY_ENDED = "ended"
     private const val MAX_ACTIONS = 64
+    private const val MAX_ENDED = 64
+
+    /** How long an ended call id refuses to ring again (replayed or late pushes). */
+    const val ENDED_TTL_MILLIS = 60 * 60 * 1000L
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -122,6 +127,24 @@ object CallStore {
     @Synchronized
     fun pendingActions(context: Context): Int = actions(context).length()
 
+    /**
+     * Remembers that a call ended so a late or replayed incoming push (or a
+     * PHP `showIncoming` for it) never rings it again.
+     */
+    @SuppressLint("ApplySharedPref") // must survive process death right after an "ended" push
+    @Synchronized
+    fun markEnded(context: Context, id: String, now: Long = System.currentTimeMillis()) {
+        val ended = ended(context, now).put(id, now)
+        while (ended.length() > MAX_ENDED) {
+            val oldest = ended.keys().asSequence().minByOrNull { ended.optLong(it) } ?: break
+            ended.remove(oldest)
+        }
+        prefs(context).edit().putString(KEY_ENDED, ended.toString()).commit()
+    }
+
+    @Synchronized
+    fun isEnded(context: Context, id: String, now: Long = System.currentTimeMillis()): Boolean = ended(context, now).has(id)
+
     fun setMappings(context: Context, json: String) {
         JSONArray(json)
         prefs(context).edit().putString(KEY_MAPPINGS, json).apply()
@@ -138,6 +161,16 @@ object CallStore {
 
     private fun calls(context: Context): JSONObject =
         runCatching { JSONObject(prefs(context).getString(KEY_CALLS, "{}")!!) }.getOrDefault(JSONObject())
+
+    /** Ended call ids still inside [ENDED_TTL_MILLIS] (expired ones are dropped). */
+    private fun ended(context: Context, now: Long): JSONObject {
+        val stored = runCatching { JSONObject(prefs(context).getString(KEY_ENDED, "{}")!!) }.getOrDefault(JSONObject())
+        stored.keys().asSequence().toList().forEach { key ->
+            val at = stored.optLong(key)
+            if (at <= 0 || now - at >= ENDED_TTL_MILLIS || at - now > ENDED_TTL_MILLIS) stored.remove(key)
+        }
+        return stored
+    }
 
     private fun actions(context: Context): JSONArray =
         runCatching { JSONArray(prefs(context).getString(KEY_ACTIONS, "[]")) }.getOrDefault(JSONArray())

@@ -28,20 +28,30 @@ object CallController {
     internal val io = Executors.newCachedThreadPool { Thread(it, "PamCalls").apply { isDaemon = true } }
     private var waiter: ModuleCompletion? = null
     private val screens = CopyOnWriteArraySet<WeakReference<Activity>>()
+    /** Orders a ringing post against [end], which may run on another thread. */
+    private val surfaces = Any()
 
     // region incoming / ongoing
 
-    /** Posts the ringing surfaces. Blocking (avatar download); run off the main thread. */
+    /**
+     * Posts the ringing surfaces. Blocking (avatar download); run off the main thread.
+     * A call that already ended (see [CallStore.markEnded]) never rings again:
+     * an "ended" push handled while the avatar downloads, or a received push
+     * replayed to PHP after the call ended, must not resurrect it.
+     */
     fun showIncoming(context: Context, call: CallInfo) {
         val app = context.applicationContext
         CallNotifier.loadAvatar(app, call.avatar)
-        val existing = CallStore.get(app, call.id)
-        if (existing?.ongoing == true) return
-        CallStore.put(app, call)
-        if (!CallNotifier.canPost(app)) return
-        CallNotifier.manager(app).notify(CallNotifier.notificationId(call.id), CallNotifier.buildIncoming(app, call))
-        handler.removeCallbacksAndMessages(timeoutToken(call.id))
-        handler.postAtTime({ timeout(app, call.id) }, timeoutToken(call.id), android.os.SystemClock.uptimeMillis() + call.timeoutMillis)
+        synchronized(surfaces) {
+            if (CallStore.isEnded(app, call.id)) return
+            val existing = CallStore.get(app, call.id)
+            if (existing?.ongoing == true) return
+            CallStore.put(app, call)
+            if (!CallNotifier.canPost(app)) return
+            CallNotifier.manager(app).notify(CallNotifier.notificationId(call.id), CallNotifier.buildIncoming(app, call))
+            handler.removeCallbacksAndMessages(timeoutToken(call.id))
+            handler.postAtTime({ timeout(app, call.id) }, timeoutToken(call.id), android.os.SystemClock.uptimeMillis() + call.timeoutMillis)
+        }
     }
 
     /** Converts or creates an ongoing call. Blocking (avatar download); run off the main thread. */
@@ -55,7 +65,10 @@ object CallController {
 
     fun end(context: Context, callId: String) {
         val app = context.applicationContext
-        stopRinging(app, callId)
+        synchronized(surfaces) {
+            CallStore.markEnded(app, callId)
+            stopRinging(app, callId)
+        }
         CallStore.remove(app, callId)
         CallForegroundService.stop(app, callId)
         CallNotifier.manager(app).cancel(CallNotifier.notificationId(callId))
