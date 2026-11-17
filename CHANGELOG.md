@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- An ended call never rings again: `Calls::end()`, Decline, HangUp, the ring
+  timeout and "ended" pushes remember the call id (persisted, 1 h, at most 64
+  ids), and a later `showIncoming` or incoming push for it is ignored (iOS
+  VoIP pushes still report and end a call). Fixes a received call push
+  replayed to PHP on app launch re-posting the ringing notification of a call
+  that had already ended, and an "ended" push racing the avatar download.
+
 ## 0.2.0 - 2026-10-05
 
 - iOS: CallKit incoming and ongoing calls (system call UI, ring timeout,

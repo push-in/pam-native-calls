@@ -61,6 +61,23 @@ final class CallsTests: XCTestCase {
         XCTAssertFalse(call("showIncoming", ["callId": .text("bad id!"), "name": .text("x")]).ok)
     }
 
+    func testEndedCallNeverRingsAgain() {
+        XCTAssertTrue(call("showIncoming", ["callId": .text("c-5"), "name": .text("Edu")]).ok)
+        XCTAssertTrue(call("end", ["callId": .text("c-5")]).ok)
+        XCTAssertTrue(CallStore.shared.isEnded("c-5"))
+        // A received push replayed to PHP after the call ended must not ring it again.
+        XCTAssertTrue(call("showIncoming", ["callId": .text("c-5"), "name": .text("Edu")]).ok)
+        XCTAssertNil(CallStore.shared.get("c-5"))
+        XCTAssertEqual(CallStore.shared.pendingActions, 0)
+        // The tombstone expires, is bounded and is cleared with the store.
+        XCTAssertFalse(CallStore.shared.isEnded("c-5", now: CallInfo.now() + CallStore.endedTtlMillis))
+        for index in 0...CallStore.maxEnded { CallStore.shared.markEnded("t-\(index)", now: 1_000 + Int64(index)) }
+        XCTAssertFalse(CallStore.shared.isEnded("t-0", now: 2_000))
+        XCTAssertTrue(CallStore.shared.isEnded("t-\(CallStore.maxEnded)", now: 2_000))
+        CallStore.shared.clear()
+        XCTAssertFalse(CallStore.shared.isEnded("c-5"))
+    }
+
     func testActionQueueSurvivesWithoutListener() {
         CallKitCenter.shared.record(CallKitCenter.kindOpen, callId: "q-1", call: nil)
         CallKitCenter.shared.record(CallKitCenter.kindAccept, callId: "q-2", call: nil)

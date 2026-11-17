@@ -188,15 +188,19 @@ struct CallInfo: Codable, Equatable {
     }
 }
 
-/// UserDefaults-backed state: calls, queued actions and push mappings.
+/// UserDefaults-backed state: calls, queued actions, push mappings and ended calls.
 final class CallStore: @unchecked Sendable {
     static let shared = CallStore()
     static let maxActions = 64
+    static let maxEnded = 64
+    /// How long an ended call id refuses to ring again (replayed or late pushes).
+    static let endedTtlMillis: Int64 = 60 * 60 * 1_000
     private let lock = NSLock()
     private let defaults: UserDefaults
     private let callsKey = "dev.pam.calls.calls"
     private let actionsKey = "dev.pam.calls.actions"
     private let mappingsKey = "dev.pam.calls.mappings"
+    private let endedKey = "dev.pam.calls.ended"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -259,6 +263,25 @@ final class CallStore: @unchecked Sendable {
         (defaults.array(forKey: actionsKey) as? [[String: Any]])?.count ?? 0
     }
 
+    /// Remembers that a call ended so a late or replayed incoming push (or a
+    /// PHP `showIncoming` for it) never rings it again (Android `markEnded`).
+    func markEnded(_ id: String, now: Int64 = CallInfo.now()) {
+        lock.lock()
+        defer { lock.unlock() }
+        var ended = loadEnded(now: now)
+        ended[id] = now
+        while ended.count > Self.maxEnded, let oldest = ended.min(by: { $0.value < $1.value })?.key {
+            ended.removeValue(forKey: oldest)
+        }
+        defaults.set(ended.mapValues { NSNumber(value: $0) }, forKey: endedKey)
+    }
+
+    func isEnded(_ id: String, now: Int64 = CallInfo.now()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadEnded(now: now)[id] != nil
+    }
+
     func setMappings(_ json: String) throws {
         guard (try? JSONSerialization.jsonObject(with: Data(json.utf8))) is [Any] else {
             throw CallsError("Push mappings must be a JSON array")
@@ -274,7 +297,19 @@ final class CallStore: @unchecked Sendable {
     func clear() {
         lock.lock()
         defer { lock.unlock() }
-        [callsKey, actionsKey, mappingsKey].forEach(defaults.removeObject(forKey:))
+        [callsKey, actionsKey, mappingsKey, endedKey].forEach(defaults.removeObject(forKey:))
+    }
+
+    /// Ended call ids still inside `endedTtlMillis` (expired ones are dropped).
+    private func loadEnded(now: Int64) -> [String: Int64] {
+        let stored = defaults.dictionary(forKey: endedKey) ?? [:]
+        var ended: [String: Int64] = [:]
+        for (id, value) in stored {
+            guard let at = (value as? NSNumber)?.int64Value, at > 0,
+                  now - at < Self.endedTtlMillis, at - now <= Self.endedTtlMillis else { continue }
+            ended[id] = at
+        }
+        return ended
     }
 
     private func load() -> [String: CallInfo] {
@@ -387,7 +422,8 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
     // MARK: Surfaces
 
     func showIncoming(_ call: CallInfo, completion: ((Error?) -> Void)? = nil) {
-        if store.get(call.id)?.ongoing == true {
+        // An ended call never rings again (late push, or a received push replayed to PHP).
+        if store.isEnded(call.id) || store.get(call.id)?.ongoing == true {
             completion?(nil)
             return
         }
@@ -448,6 +484,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
 
     /// Removes every surface without emitting an action (Android `end`).
     func end(_ callId: String) {
+        store.markEnded(callId)
         cancelTimeout(callId)
         let uuid = CallInfo.uuid(for: callId)
         store.remove(callId)
@@ -511,6 +548,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
             guard let self, let current = self.store.get(call.id), !current.ongoing else { return }
             self.timeouts[call.id] = nil
             self.provider.reportCall(with: CallInfo.uuid(for: call.id), endedAt: Date(), reason: .unanswered)
+            self.store.markEnded(call.id)
             self.store.remove(call.id)
             self.record(Self.kindTimeout, callId: call.id, call: current)
         }
@@ -547,6 +585,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
             return
         }
         cancelTimeout(call.id)
+        store.markEnded(call.id)
         store.remove(call.id)
         record(call.ongoing ? Self.kindHangUp : Self.kindDecline, callId: call.id, call: call)
         action.fulfill()
@@ -615,9 +654,13 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
         let aps = payload.dictionaryPayload["aps"] as? [String: Any]
         let title = ((aps?["alert"] as? [String: Any])?["title"] as? String) ?? ""
         switch PushCallMatcher.match(store.mappings(), data: data, fallbackTitle: title) {
+        case let .incoming(call)? where store.isEnded(call.id):
+            // Late push for an ended call: iOS still requires a reported call.
+            reportAndEnd(id: "ended-\(UUID().uuidString)", completion: completion)
         case let .incoming(call)?:
             showIncoming(call) { _ in completion() }
         case let .ended(callId)?:
+            store.markEnded(callId)
             if store.get(callId) != nil {
                 end(callId)
                 completion()

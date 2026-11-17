@@ -224,6 +224,38 @@ class CallsInstrumentedTest {
     }
 
     @Test
+    fun endedCallNeverRingsAgainFromPushOrPhp() {
+        val mapping = JSONObject()
+            .put("typeField", "type").put("typeValues", JSONArray(listOf("2")))
+            .put("idField", "call_id").put("nameField", "caller_name")
+            .put("endedField", "call_event").put("endedValues", JSONArray(listOf("1")))
+        assertTrue(call("configurePush", mapOf("mappingsJson" to WireValue.Text(JSONArray(listOf(mapping)).toString()))).ok)
+        val ringing = JSONObject().put("type", "2").put("call_id", "gone-1").put("caller_name", "Bia")
+        context.sendBroadcast(BackgroundPush.receivedIntent(context, "e1", dataJson = ringing.toString()))
+        waitUntil(5_000) { notification("gone-1") != null }
+        context.sendBroadcast(BackgroundPush.receivedIntent(context, "e2", dataJson = JSONObject(ringing.toString()).put("call_event", "1").toString()))
+        waitUntil(5_000) { notification("gone-1") == null }
+        assertTrue(CallStore.isEnded(context, "gone-1"))
+
+        // App reopened: the queued "received" push replayed to PHP shows it again.
+        incoming("gone-1")
+        // A late duplicate of the original push arrives too.
+        context.sendBroadcast(BackgroundPush.receivedIntent(context, "e3", dataJson = ringing.toString()))
+        Thread.sleep(1_000)
+        assertNull(notification("gone-1"))
+        assertNull(CallStore.get(context, "gone-1"))
+        assertEquals(0, CallStore.pendingActions(context))
+
+        // The tombstone expires, is bounded and does not block other calls.
+        assertFalse(CallStore.isEnded(context, "gone-1", System.currentTimeMillis() + CallStore.ENDED_TTL_MILLIS))
+        repeat(70) { CallStore.markEnded(context, "t-$it", 1_000L + it) }
+        assertFalse(CallStore.isEnded(context, "t-0", 2_000L))
+        assertTrue(CallStore.isEnded(context, "t-69", 2_000L))
+        incoming("fresh-1")
+        waitUntil(5_000) { notification("fresh-1") != null }
+    }
+
+    @Test
     fun matcherRejectsUnsafeIdsAndFallsBackToPushTitle() {
         val mappings = JSONArray().put(
             JSONObject().put("typeField", "kind").put("typeValues", JSONArray(listOf("call.incoming"))).put("idField", "id").put("nameField", "from"),
