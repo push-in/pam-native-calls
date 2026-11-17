@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - 2026-11-16
 
 - An ended call never rings again: `Calls::end()`, Decline, HangUp, the ring
   timeout and "ended" pushes remember the call id (persisted, 1 h, at most 64
