@@ -36,6 +36,7 @@ object CallNotifier {
         context.getSystemService(NotificationManager::class.java)
 
     fun ensureChannels(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // Android 7.x: see legacyBuilder
         val manager = manager(context)
         if (manager.getNotificationChannel(CHANNEL_INCOMING) == null) {
             manager.createNotificationChannel(
@@ -66,6 +67,30 @@ object CallNotifier {
         }
     }
 
+    /**
+     * Android 7.x has no channels: the builder carries what the channel would
+     * (ringtone, vibration and heads-up priority for incoming calls).
+     */
+    private fun builder(context: Context, channel: String): Notification.Builder {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) return Notification.Builder(context, channel)
+        @Suppress("DEPRECATION")
+        return Notification.Builder(context).apply {
+            if (channel == CHANNEL_INCOMING) {
+                setPriority(Notification.PRIORITY_MAX)
+                setVibrate(longArrayOf(0, 700, 500, 700, 1_200))
+                setSound(
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build(),
+                )
+            } else {
+                setPriority(Notification.PRIORITY_DEFAULT)
+            }
+        }
+    }
+
     fun canPost(context: Context): Boolean = manager(context).areNotificationsEnabled()
 
     fun buildIncoming(context: Context, call: CallInfo): Notification {
@@ -77,7 +102,7 @@ object CallNotifier {
         val subtitle = call.subtitle.ifBlank {
             context.getString(if (call.video) R.string.pam_calls_incoming_video else R.string.pam_calls_incoming_voice)
         }
-        val builder = Notification.Builder(context, CHANNEL_INCOMING)
+        val builder = builder(context, CHANNEL_INCOMING)
             .setSmallIcon(R.drawable.pam_calls_ic_call)
             .setContentTitle(call.name)
             .setContentText(subtitle)
@@ -90,7 +115,8 @@ object CallNotifier {
             .setContentIntent(CallIntents.activity(context, call.id, CallIntents.ACTION_OPEN))
             .setFullScreenIntent(fullScreen, true)
             .setDeleteIntent(CallIntents.broadcast(context, call.id, CallIntents.ACTION_TIMEOUT))
-            .setTimeoutAfter(call.timeoutMillis)
+        // Android 7.x relies on CallController's in-process timeout alone.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) builder.setTimeoutAfter(call.timeoutMillis)
         avatar?.let { builder.setLargeIcon(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setStyle(
@@ -119,7 +145,7 @@ object CallNotifier {
         ensureChannels(context)
         val avatar = cachedAvatar(call.avatar)
         val hangUp = CallIntents.broadcast(context, call.id, CallIntents.ACTION_HANG_UP)
-        val builder = Notification.Builder(context, CHANNEL_ONGOING)
+        val builder = builder(context, CHANNEL_ONGOING)
             .setSmallIcon(R.drawable.pam_calls_ic_call)
             .setContentTitle(call.name.ifBlank { context.getString(R.string.pam_calls_ongoing) })
             .setContentText(call.subtitle.ifBlank { context.getString(R.string.pam_calls_ongoing_tap) })

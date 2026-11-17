@@ -57,7 +57,9 @@ class CallForegroundService : Service() {
 
         fun start(context: Context, callId: String) {
             val intent = Intent(context, CallForegroundService::class.java).putExtra(CallIntents.EXTRA_CALL_ID, callId)
-            val started = runCatching { context.startForegroundService(intent) }.isSuccess
+            val started = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            }.isSuccess
             if (!started) {
                 CallStore.get(context, callId)?.let {
                     CallNotifier.manager(context).notify(CallNotifier.notificationId(callId), CallNotifier.buildOngoing(context, it, callStyle = false))

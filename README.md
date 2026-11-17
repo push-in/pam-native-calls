@@ -56,7 +56,7 @@ Incoming calls, actions, ongoing calls, ringing from push, the iOS VoIP token, r
 
 | Platform | Support | Notes |
 | --- | --- | --- |
-| Android | API 26+ | `Notification.CallStyle` on API 31+, full-screen intent, `camera\|microphone` foreground service |
+| Android | API 24+ | `Notification.CallStyle` on API 31+, full-screen intent, `camera\|microphone` foreground service |
 | iOS | 15.0+ | CallKit, PushKit, AVFoundation; not validated on a device yet |
 | PAM Native | 1.0.35 to < 2.0.0 | From `pam-native.plugin.json`; PHP 8.5+ |
 
