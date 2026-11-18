@@ -176,7 +176,17 @@ $test('android surfaces use CallStyle, full-screen intents and a camera|micropho
     $check(str_contains($manifest, 'android:foregroundServiceType="camera|microphone"'), 'service type');
     $check(str_contains($manifest, 'dev.pam.nativeapp.action.PUSH_RECEIVED'), 'push receiver');
     $plugin = json_decode((string) file_get_contents(dirname(__DIR__).'/pam-native.plugin.json'), true, flags: JSON_THROW_ON_ERROR);
-    $check($plugin['pamNative'] === ['minimum' => '1.0.35', 'maximumExclusive' => '2.0.0'], 'range');
+    $check((static function (array $range): bool {
+        // The range follows composer.json's PAM Native requirement (^X.Y.Z):
+        // a core bump updates both files and never this test.
+        $composer = json_decode((string) file_get_contents(dirname(__DIR__).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+        $required = ltrim((string) $composer['require']['pushinbr/pam-native'], '^');
+        $minimum = (string) ($range['minimum'] ?? '');
+        return preg_match('/^\d+\.\d+\.\d+$/', $minimum) === 1
+            && version_compare($minimum, '1.0.35', '>=')
+            && version_compare(preg_match('/^\d+\.\d+$/', $required) ? $required.'.0' : $required, $minimum, '==')
+            && ($range['maximumExclusive'] ?? null) === '2.0.0';
+    })($plugin['pamNative']), 'range');
     $check(in_array('android.permission.USE_FULL_SCREEN_INTENT', $plugin['android']['permissions'], true), 'permission');
 });
 
