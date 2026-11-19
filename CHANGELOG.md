@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.4 - 2026-11-18
+
+- Fixed: accepting from the lock screen no longer drops the app behind the keyguard when the app clears the ringing UI before showOngoing (30 s grace; other calls ending never release the accepted one).
+- Fixed: CallForegroundService always honours the startForegroundService() contract (no "did not then call startForeground" crash); Android 14+ skips the service without a granted type.
+- Fixed: showOngoing no longer resurrects a call ended while its avatar downloaded.
+- Changed: incoming calls ring immediately; the avatar is fetched afterwards and reposted silently.
+- Changed: the full-screen incoming call UI scrolls and respects system bars (landscape phones).
+- Added: IncomingCall::declineEndpoint(), PushCallMapping::declineEndpoint() and CallAction::$serverNotified: native decline delivery while PHP is suspended.
+- Added: Android picture-in-picture: Calls::pictureInPicture(), enterPictureInPicture(), onPictureInPicture() and CallReadiness::$pictureInPictureSupported (the app declares android.pictureInPicture, PAM Native 1.54.0+).
+- Added: Spanish and French strings.
+
 ## 0.2.3 - 2026-11-18
 
 - Tests: the PAM Native range check follows the requirement in composer.json
