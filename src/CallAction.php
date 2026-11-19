@@ -15,6 +15,8 @@ final readonly class CallAction
         public string $deepLink = '',
         public array $data = [],
         public int $atMillis = 0,
+        /** Decline only: the plugin already delivered it to the decline endpoint (2xx). */
+        public bool $serverNotified = false,
     ) {
     }
 
@@ -35,6 +37,7 @@ final readonly class CallAction
             deepLink: (string) ($values['deepLink'] ?? ''),
             data: is_array($data) ? $data : [],
             atMillis: (int) ($values['at'] ?? 0),
+            serverNotified: (bool) ($values['serverNotified'] ?? false),
         );
     }
 }

@@ -31,6 +31,8 @@ final class PushCallMapping
     private int $timeoutSeconds = 45;
     private string $acceptLabel = '';
     private string $declineLabel = '';
+    private string $declineUrlField = '';
+    private string $declineTokenField = '';
 
     /** @param list<string> $typeValues */
     private function __construct(private readonly string $typeField, private readonly array $typeValues)
@@ -109,6 +111,19 @@ final class PushCallMapping
         return $this->with('acceptLabel', Calls::text($accept, 64))->with('declineLabel', Calls::text($decline, 64));
     }
 
+    /**
+     * Decline natively from the push data: `$urlField` holds the endpoint
+     * (http(s)) and `$tokenField` a short-lived token sent as
+     * `Authorization: Bearer`. On Decline the plugin posts
+     * `{"call_id", "action": "decline"}` there itself, PHP suspended or not.
+     */
+    public function declineEndpoint(string $urlField, ?string $tokenField = null): self
+    {
+        $copy = $this->with('declineUrlField', self::field($urlField));
+
+        return $tokenField === null ? $copy : $copy->with('declineTokenField', self::field($tokenField));
+    }
+
     /** @return array<string, string|int|list<string>> */
     public function toArray(): array
     {
@@ -127,6 +142,8 @@ final class PushCallMapping
             'timeoutMillis' => $this->timeoutSeconds * 1000,
             'acceptLabel' => $this->acceptLabel,
             'declineLabel' => $this->declineLabel,
+            'declineUrlField' => $this->declineUrlField,
+            'declineTokenField' => $this->declineTokenField,
         ];
     }
 

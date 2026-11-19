@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pam_calls_channel_incoming">Appels entrants</string>
+    <string name="pam_calls_channel_incoming_description">Sonne pour les appels vocaux et vidéo entrants</string>
+    <string name="pam_calls_channel_ongoing">Appels en cours</string>
+    <string name="pam_calls_channel_ongoing_description">Raccourci pour revenir à l\'appel en cours</string>
+    <string name="pam_calls_incoming_voice">Appel vocal entrant</string>
+    <string name="pam_calls_incoming_video">Appel vidéo entrant</string>
+    <string name="pam_calls_ongoing">Appel en cours</string>
+    <string name="pam_calls_ongoing_tap">Touchez pour revenir à l\'appel</string>
+    <string name="pam_calls_accept">Répondre</string>
+    <string name="pam_calls_decline">Refuser</string>
+    <string name="pam_calls_hang_up">Raccrocher</string>
+</resources>

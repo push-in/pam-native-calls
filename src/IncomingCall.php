@@ -18,6 +18,8 @@ final class IncomingCall
     private string $deepLink = '';
     private string $acceptLabel = '';
     private string $declineLabel = '';
+    private string $declineUrl = '';
+    private string $declineToken = '';
 
     /** @var array<string, string|int|float|bool> */
     private array $data = [];
@@ -88,6 +90,22 @@ final class IncomingCall
         return $copy;
     }
 
+    /**
+     * Decline natively: on Decline (notification or lock-screen UI) the plugin
+     * sends `POST $url` with `{"call_id", "action": "decline"}` and
+     * `Authorization: Bearer $token` itself, so the caller stops ringing even
+     * when PHP is suspended. Use a short-lived token valid only for this call.
+     * The Decline action then reports `serverNotified`.
+     */
+    public function declineEndpoint(string $url, string $token = ''): self
+    {
+        $copy = clone $this;
+        $copy->declineUrl = Calls::endpoint($url);
+        $copy->declineToken = Calls::text($token, 4096);
+
+        return $copy;
+    }
+
     /** @param array<string, string|int|float|bool> $data Returned untouched in every CallAction. */
     public function data(array $data): self
     {
@@ -127,6 +145,8 @@ final class IncomingCall
             'deepLink' => $this->deepLink,
             'acceptLabel' => $this->acceptLabel,
             'declineLabel' => $this->declineLabel,
+            'declineUrl' => $this->declineUrl,
+            'declineToken' => $this->declineToken,
             'dataJson' => json_encode((object) $this->data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
         ];
     }

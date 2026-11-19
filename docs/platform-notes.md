@@ -32,7 +32,7 @@ It also registers `IncomingCallActivity` (full-screen call UI),
 `CallForegroundService` (`foregroundServiceType="camera|microphone"`).
 Notification channels: `pam_calls_incoming` (high importance, default ringtone
 with `USAGE_NOTIFICATION_RINGTONE`, insistent) and `pam_calls_ongoing` (silent).
-Strings are localized in English and Portuguese.
+Strings (channel names, labels) are localized in English, Portuguese, Spanish and French.
 
 Push-driven ringing on Android uses **FCM data messages** delivered by the PAM
 Native core push stack, so the app needs Firebase configured
@@ -42,6 +42,17 @@ system and never reaches the receiver while the app is in the background.
 
 Play policy: `USE_FULL_SCREEN_INTENT` must be declared in the Play Console as a
 calling app permission.
+
+Picture-in-picture: the plugin drives it on the host Activity but does not
+change its manifest. Apps that use `Calls::pictureInPicture()` declare
+`android:supportsPictureInPicture="true"` on `dev.pam.nativeapp.PamActivity`
+(through the core's manifest option for the host Activity, or an app manifest
+overlay with `tools:node="merge"`). Without it the calls answer
+`available`/`entered` false.
+
+The full-screen incoming call UI scrolls as one column (caller, then actions)
+and pads itself for the system bars and display cutout, so it also fits a phone
+held in landscape.
 
 ### iOS
 

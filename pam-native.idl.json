@@ -6,9 +6,9 @@
         "CallActionKind": {"Accept": 1, "Decline": 2, "Open": 3, "HangUp": 4, "Timeout": 5}
     },
     "records": {
-        "CallAction": {"kind": "CallActionKind", "callId": "string", "video": "bool", "deepLink": "string", "dataJson": "string", "at": "int"},
-        "IncomingCall": {"callId": "string", "name": "string", "avatar": "string?", "video": "bool", "timeoutMillis": "int", "subtitle": "string?", "deepLink": "string?", "acceptLabel": "string?", "declineLabel": "string?", "dataJson": "string"},
+        "CallAction": {"kind": "CallActionKind", "callId": "string", "video": "bool", "deepLink": "string", "dataJson": "string", "at": "int", "serverNotified": "bool"},
+        "IncomingCall": {"callId": "string", "name": "string", "avatar": "string?", "video": "bool", "timeoutMillis": "int", "subtitle": "string?", "deepLink": "string?", "acceptLabel": "string?", "declineLabel": "string?", "declineUrl": "string?", "declineToken": "string?", "dataJson": "string"},
         "OngoingCall": {"callId": "string", "name": "string?", "avatar": "string?", "video": "bool", "sinceMillis": "int", "subtitle": "string?", "deepLink": "string?", "hangUpLabel": "string?"},
-        "CallReadiness": {"notificationsEnabled": "bool", "fullScreenIntentAllowed": "bool", "callStyleSupported": "bool"}
+        "CallReadiness": {"notificationsEnabled": "bool", "fullScreenIntentAllowed": "bool", "callStyleSupported": "bool", "pictureInPictureSupported": "bool"}
     }
 }

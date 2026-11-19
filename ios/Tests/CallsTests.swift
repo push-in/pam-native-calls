@@ -109,6 +109,30 @@ final class CallsTests: XCTestCase {
         XCTAssertNil(PushCallMatcher.match(mappings, data: ["type": "call.incoming", "call_id": "bad id!"]))
     }
 
+    func testPushMappingCarriesTheDeclineEndpoint() {
+        let mappings: [[String: Any]] = [[
+            "typeField": "type", "typeValues": ["call"], "idField": "call_id", "nameField": "caller_name",
+            "declineUrlField": "decline_url", "declineTokenField": "decline_token",
+        ]]
+        let incoming = PushCallMatcher.match(mappings, data: [
+            "type": "call", "call_id": "c-1", "caller_name": "Eva",
+            "decline_url": "https://api.example.com/calls/c-1/decline", "decline_token": "one-time",
+        ])
+        guard case let .incoming(info)? = incoming else { return XCTFail("incoming") }
+        XCTAssertEqual(info.declineUrl, "https://api.example.com/calls/c-1/decline")
+        XCTAssertEqual(info.declineToken, "one-time")
+        let unsafe = PushCallMatcher.match(mappings, data: ["type": "call", "call_id": "c-2", "decline_url": "ftp://x"])
+        guard case let .incoming(other)? = unsafe else { return XCTFail("incoming") }
+        XCTAssertNil(other.declineUrl)
+        XCTAssertNil(other.declineToken)
+    }
+
+    func testPictureInPictureIsAndroidOnly() {
+        XCTAssertEqual(call("pictureInPicture", ["eligible": .flag(true)]).values["available"], .flag(false))
+        XCTAssertEqual(call("readiness").values["pictureInPictureSupported"], .flag(false))
+        XCTAssertFalse(call("nextPictureInPicture").ok)
+    }
+
     func testCallUuidIsDeterministicVersion5() {
         let uuid = CallInfo.uuid(for: "abc")
         XCTAssertEqual(uuid, CallInfo.uuid(for: "abc"))

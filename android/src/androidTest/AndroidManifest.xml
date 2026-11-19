@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Test-only: the decline endpoint test talks to a loopback HTTP server. -->
+    <application android:usesCleartextTraffic="true">
+        <!-- Stands in for PamActivity: picture-in-picture host handling size changes in place. -->
+        <activity
+            android:name="dev.pam.calls.PipHostActivity"
+            android:configChanges="orientation|screenLayout|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:supportsPictureInPicture="true" />
+    </application>
+</manifest>

@@ -61,8 +61,16 @@ public final class CallsModule: NativeModule, @unchecked Sendable {
                         // CallKit always presents full screen on the lock screen.
                         "fullScreenIntentAllowed": .flag(CallKitCenter.callKitAllowed),
                         "callStyleSupported": .flag(CallKitCenter.callKitAllowed),
+                        "pictureInPictureSupported": .flag(false),
                     ])
                 }
+            case "pictureInPicture":
+                // Android only: CallKit has no in-call screen of the app to shrink.
+                succeed(completion, ["available": .flag(false)])
+            case "enterPictureInPicture":
+                succeed(completion, ["entered": .flag(false)])
+            case "nextPictureInPicture":
+                fail(completion, "Picture-in-picture is Android only")
             case "openFullScreenSettings":
                 DispatchQueue.main.async {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -131,6 +139,9 @@ struct CallInfo: Codable, Equatable {
     var sinceMillis: Int64 = CallInfo.now()
     var ongoing = false
     var ringingSince: Int64 = CallInfo.now()
+    /// Endpoint told natively about a decline (optional: older stored calls decode without it).
+    var declineUrl: String?
+    var declineToken: String?
 
     static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1_000) }
 
@@ -153,7 +164,9 @@ struct CallInfo: Codable, Equatable {
             dataJson: values.text("dataJson", "{}"),
             timeoutMillis: min(max(values.integer("timeoutMillis", 45_000), 5_000), 300_000),
             acceptLabel: String(values.text("acceptLabel", "").prefix(64)),
-            declineLabel: String(values.text("declineLabel", "").prefix(64))
+            declineLabel: String(values.text("declineLabel", "").prefix(64)),
+            declineUrl: CallDecline.accepts(values.text("declineUrl", "")) ? String(values.text("declineUrl", "").prefix(2_048)) : nil,
+            declineToken: String(values.text("declineToken", "").prefix(4_096))
         )
     }
 
@@ -352,6 +365,7 @@ enum PushCallMatcher {
                 strings("videoValues").map { $0.lowercased() }.contains(text(videoField)?.lowercased() ?? "\u{0}")
             let field = { (key: String) in text(mapping[key] as? String ?? "") ?? "" }
             let name = field("nameField")
+            let declineUrl = String(field("declineUrlField").prefix(2_048))
             let dataJson = (try? JSONSerialization.data(withJSONObject: data)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             return .incoming(CallInfo(
                 id: callId,
@@ -363,7 +377,9 @@ enum PushCallMatcher {
                 dataJson: dataJson,
                 timeoutMillis: min(max((mapping["timeoutMillis"] as? NSNumber)?.int64Value ?? 45_000, 5_000), 300_000),
                 acceptLabel: mapping["acceptLabel"] as? String ?? "",
-                declineLabel: mapping["declineLabel"] as? String ?? ""
+                declineLabel: mapping["declineLabel"] as? String ?? "",
+                declineUrl: CallDecline.accepts(declineUrl) ? declineUrl : nil,
+                declineToken: CallDecline.accepts(declineUrl) ? String(field("declineTokenField").prefix(4_096)) : nil
             ))
         }
         return nil
@@ -515,7 +531,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
         if let replaced { fail(replaced, "Action read replaced") }
     }
 
-    func record(_ kind: Int64, callId: String, call: CallInfo?) {
+    func record(_ kind: Int64, callId: String, call: CallInfo?, serverNotified: Bool = false) {
         let action: [String: Any] = [
             "kind": kind,
             "callId": callId,
@@ -523,6 +539,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
             "deepLink": call?.deepLink ?? "",
             "dataJson": call?.dataJson ?? "{}",
             "at": CallInfo.now(),
+            "serverNotified": serverNotified,
         ]
         lock.lock()
         let receiver = waiter
@@ -539,6 +556,7 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
             "deepLink": .text(action["deepLink"] as? String ?? ""),
             "dataJson": .text(action["dataJson"] as? String ?? "{}"),
             "at": .integer((action["at"] as? NSNumber)?.int64Value ?? 0),
+            "serverNotified": .flag((action["serverNotified"] as? NSNumber)?.boolValue ?? false),
         ]
     }
 
@@ -587,7 +605,14 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
         cancelTimeout(call.id)
         store.markEnded(call.id)
         store.remove(call.id)
-        record(call.ongoing ? Self.kindHangUp : Self.kindDecline, callId: call.id, call: call)
+        if !call.ongoing, CallDecline.accepts(call.declineUrl ?? "") {
+            // Tell the server natively: PHP may not be running (PushKit woke the app).
+            CallDecline.send(call) { notified in
+                self.record(Self.kindDecline, callId: call.id, call: call, serverNotified: notified)
+            }
+        } else {
+            record(call.ongoing ? Self.kindHangUp : Self.kindDecline, callId: call.id, call: call)
+        }
         action.fulfill()
     }
 
@@ -679,6 +704,62 @@ final class CallKitCenter: NSObject, CXProviderDelegate, PKPushRegistryDelegate,
         provider.reportNewIncomingCall(with: uuid, update: update) { _ in
             self.provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
             completion()
+        }
+    }
+}
+
+/// Native decline delivery (Android `CallDeclineEndpoint`): `POST declineUrl`
+/// with `{"call_id", "action": "decline"}` and `Authorization: Bearer
+/// declineToken`, inside a background task so a PushKit-woken app finishes it.
+enum CallDecline {
+    static func accepts(_ url: String) -> Bool {
+        let lower = url.lowercased()
+        return lower.hasPrefix("https://") || lower.hasPrefix("http://")
+    }
+
+    static func send(_ call: CallInfo, completion: @escaping @Sendable (Bool) -> Void) {
+        guard let raw = call.declineUrl, accepts(raw), let url = URL(string: raw) else {
+            completion(false)
+            return
+        }
+        var request = URLRequest(url: url, timeoutInterval: 8)
+        request.httpMethod = "POST"
+        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let token = (call.declineToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["call_id": call.id, "action": "decline"])
+        let background = BackgroundTask()
+        let prepared = request
+        Task { @MainActor in
+            background.begin()
+            URLSession.shared.dataTask(with: prepared) { _, response, _ in
+                completion((200..<300).contains((response as? HTTPURLResponse)?.statusCode ?? 0))
+                Task { @MainActor in background.end() }
+            }.resume()
+        }
+    }
+
+    /// UIKit background task id shared between the request and its expiration handler.
+    final class BackgroundTask: @unchecked Sendable {
+        private let lock = NSLock()
+        private var id: UIBackgroundTaskIdentifier = .invalid
+
+        @MainActor func begin() {
+            let assigned = UIApplication.shared.beginBackgroundTask(withName: "pam-call-decline") { [weak self] in
+                self?.end()
+            }
+            lock.lock()
+            id = assigned
+            lock.unlock()
+        }
+
+        @MainActor func end() {
+            lock.lock()
+            let current = id
+            id = .invalid
+            lock.unlock()
+            if current != .invalid { UIApplication.shared.endBackgroundTask(current) }
         }
     }
 }

@@ -22,6 +22,9 @@ data class CallInfo(
     val sinceMillis: Long = System.currentTimeMillis(),
     val ongoing: Boolean = false,
     val ringingSince: Long = System.currentTimeMillis(),
+    /** Endpoint the plugin calls natively when the user declines (see PushCallMapping::declineEndpoint). */
+    val declineUrl: String = "",
+    val declineToken: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("avatar", avatar).put("video", video)
@@ -29,6 +32,8 @@ data class CallInfo(
         .put("timeoutMillis", timeoutMillis).put("acceptLabel", acceptLabel).put("declineLabel", declineLabel)
         .put("hangUpLabel", hangUpLabel).put("sinceMillis", sinceMillis).put("ongoing", ongoing)
         .put("ringingSince", ringingSince)
+        .put("declineUrl", declineUrl)
+        .put("declineToken", declineToken)
 
     companion object {
         private val ID = Regex("[A-Za-z0-9_.:-]{1,128}")
@@ -50,6 +55,8 @@ data class CallInfo(
             sinceMillis = json.optLong("sinceMillis", System.currentTimeMillis()),
             ongoing = json.optBoolean("ongoing"),
             ringingSince = json.optLong("ringingSince", System.currentTimeMillis()),
+            declineUrl = json.optString("declineUrl"),
+            declineToken = json.optString("declineToken"),
         )
     }
 }
@@ -63,6 +70,17 @@ object CallStore {
     private const val KEY_ENDED = "ended"
     private const val MAX_ACTIONS = 64
     private const val MAX_ENDED = 64
+    private const val KEY_ACCEPTED = "acceptedCall"
+    private const val KEY_ACCEPTED_AT = "acceptedAt"
+    private const val LEGACY_ACCEPTED = "accepted"
+
+    /**
+     * How long an accepted call keeps the app over the lock screen after the
+     * app removed its surfaces (`end`) without `showOngoing`: apps that clear
+     * the ringing UI on accept and publish the ongoing call once media
+     * connects would otherwise drop behind the keyguard while connecting.
+     */
+    const val ACCEPT_GRACE_MILLIS = 30_000L
 
     /** How long an ended call id refuses to ring again (replayed or late pushes). */
     const val ENDED_TTL_MILLIS = 60 * 60 * 1000L
@@ -97,11 +115,31 @@ object CallStore {
         }.toList()
     }
 
-    /** Apps stay visible over the lock screen while a call was accepted or is ongoing. */
-    fun hasActiveCall(context: Context): Boolean = all(context).any { it.ongoing } || prefs(context).getBoolean("accepted", false)
+    /**
+     * Apps stay visible over the lock screen while a call is ongoing or was
+     * accepted: the accepted call keeps it while it is still known (ringing
+     * surfaces removed, media connecting) and for [ACCEPT_GRACE_MILLIS] after
+     * acceptance once the app removed it before calling `showOngoing`.
+     */
+    fun hasActiveCall(context: Context, now: Long = System.currentTimeMillis()): Boolean =
+        all(context).any { it.ongoing } || acceptedHolds(context, now)
 
-    fun setAccepted(context: Context, accepted: Boolean) {
-        prefs(context).edit().putBoolean("accepted", accepted).apply()
+    fun acceptedHolds(context: Context, now: Long = System.currentTimeMillis()): Boolean {
+        val id = acceptedCallId(context) ?: return false
+        val at = prefs(context).getLong(KEY_ACCEPTED_AT, 0L)
+        return get(context, id) != null || (at in 1..now && now - at < ACCEPT_GRACE_MILLIS)
+    }
+
+    fun acceptedCallId(context: Context): String? = prefs(context).getString(KEY_ACCEPTED, null)?.takeIf { it.isNotEmpty() }
+
+    fun acceptedAt(context: Context): Long = prefs(context).getLong(KEY_ACCEPTED_AT, 0L)
+
+    /** Marks [callId] as the accepted call, or clears it (null). */
+    fun setAccepted(context: Context, callId: String?, now: Long = System.currentTimeMillis()) {
+        prefs(context).edit().apply {
+            remove(LEGACY_ACCEPTED)
+            if (callId == null) remove(KEY_ACCEPTED).remove(KEY_ACCEPTED_AT) else putString(KEY_ACCEPTED, callId).putLong(KEY_ACCEPTED_AT, now)
+        }.apply()
     }
 
     @SuppressLint("ApplySharedPref") // actions must survive process death

@@ -15,6 +15,7 @@ import dev.pam.nativeapp.protocol.WireValue
 class CallsModule(private val context: Context) : NativeModule {
     init {
         LockScreenPolicy.install(context)
+        CallPictureInPicture.install(context)
     }
 
     override fun invoke(method: String, payload: ByteArray, completion: ModuleCompletion) {
@@ -52,6 +53,19 @@ class CallsModule(private val context: Context) : NativeModule {
                     completion.success()
                 }
                 "readiness" -> completion.success(readiness(app))
+                "pictureInPicture" -> {
+                    val available = CallPictureInPicture.configure(
+                        app,
+                        values.flag("eligible"),
+                        values.integer("width", 9).toInt(),
+                        values.integer("height", 16).toInt(),
+                    )
+                    completion.success(mapOf("available" to WireValue.Flag(available)))
+                }
+                "enterPictureInPicture" -> CallPictureInPicture.enter(app) { entered ->
+                    completion.success(mapOf("entered" to WireValue.Flag(entered)))
+                }
+                "nextPictureInPicture" -> CallPictureInPicture.next(completion)
                 "openFullScreenSettings" -> {
                     openSettings(app)
                     completion.success()
@@ -72,6 +86,8 @@ class CallsModule(private val context: Context) : NativeModule {
         timeoutMillis = values.integer("timeoutMillis", 45_000).coerceIn(5_000, 300_000),
         acceptLabel = values.text("acceptLabel", "").take(64),
         declineLabel = values.text("declineLabel", "").take(64),
+        declineUrl = values.text("declineUrl", "").take(2048).takeIf(CallDeclineEndpoint::accepts).orEmpty(),
+        declineToken = values.text("declineToken", "").take(4096),
     )
 
     private fun ongoing(values: Map<String, WireValue>): CallInfo {
@@ -98,6 +114,7 @@ class CallsModule(private val context: Context) : NativeModule {
             "notificationsEnabled" to WireValue.Flag(manager.areNotificationsEnabled()),
             "fullScreenIntentAllowed" to WireValue.Flag(fullScreen),
             "callStyleSupported" to WireValue.Flag(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S),
+            "pictureInPictureSupported" to WireValue.Flag(CallPictureInPicture.supported(context)),
         )
     }
 

@@ -71,7 +71,10 @@ object LockScreenPolicy : Application.ActivityLifecycleCallbacks {
 /** Installs [LockScreenPolicy] at process start, before any activity is created. */
 class CallsInitializer : ContentProvider() {
     override fun onCreate(): Boolean {
-        context?.let(LockScreenPolicy::install)
+        context?.let {
+            LockScreenPolicy.install(it)
+            CallPictureInPicture.install(it)
+        }
         return true
     }
 

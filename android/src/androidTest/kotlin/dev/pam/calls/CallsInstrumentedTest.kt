@@ -162,8 +162,151 @@ class CallsInstrumentedTest {
         assertEquals("in-4", (action["callId"] as WireValue.Text).value)
         assertNull(notification("in-4"))
         assertTrue(LockScreenPolicy.isActive(context))
+        // The app clears the ringing surfaces on accept, before media connects:
+        // the accepted call keeps the app over the lock screen meanwhile.
+        assertTrue(call("end", mapOf("callId" to WireValue.Text("in-4"))).ok)
+        assertTrue(LockScreenPolicy.isActive(context))
+        assertTrue(call("showOngoing", mapOf("callId" to WireValue.Text("in-4"), "name" to WireValue.Text("Ana"))).ok)
+        assertTrue(LockScreenPolicy.isActive(context))
         assertTrue(call("end", mapOf("callId" to WireValue.Text("in-4"))).ok)
         assertFalse(LockScreenPolicy.isActive(context))
+    }
+
+    @Test
+    fun acceptedCallSurvivesOtherCallsEndingAndExpiresAfterTheGrace() {
+        incoming("acc-1")
+        incoming("acc-2")
+        CallController.accept(context, "acc-1", launch = false)
+        assertTrue(call("end", mapOf("callId" to WireValue.Text("acc-2"))).ok)
+        assertTrue(LockScreenPolicy.isActive(context))
+        assertTrue(call("end", mapOf("callId" to WireValue.Text("acc-1"))).ok)
+        assertTrue(CallStore.hasActiveCall(context))
+        val now = System.currentTimeMillis()
+        assertFalse(CallStore.hasActiveCall(context, now + CallStore.ACCEPT_GRACE_MILLIS + 1))
+        assertTrue(call("endAll").ok)
+        assertFalse(LockScreenPolicy.isActive(context))
+    }
+
+    @Test
+    fun ringingStartsBeforeTheAvatarDownloads() {
+        // Non-routable address: the avatar connect only times out (3 s).
+        val started = System.currentTimeMillis()
+        val pending = CountDownLatch(1)
+        module.invoke(
+            "showIncoming",
+            WireMap.encode(
+                mapOf(
+                    "callId" to WireValue.Text("slow-1"),
+                    "name" to WireValue.Text("Ana"),
+                    "avatar" to WireValue.Text("https://10.255.255.1/avatar.png"),
+                    "video" to WireValue.Flag(false),
+                    "timeoutMillis" to WireValue.Integer(45_000),
+                ),
+            ),
+            ModuleCompletion { _, _ -> pending.countDown() },
+        )
+        waitUntil(1_500) { notification("slow-1") != null }
+        assertTrue("rang after ${System.currentTimeMillis() - started}ms", System.currentTimeMillis() - started < 1_500)
+        assertTrue(pending.await(10, TimeUnit.SECONDS))
+        assertNotNull(notification("slow-1"))
+    }
+
+    @Test
+    fun foregroundServiceStartRacingEndNeverCrashes() {
+        repeat(5) { index ->
+            val id = "race-$index"
+            CallStore.put(context, CallInfo(id = id, name = "Ana", ongoing = true))
+            CallForegroundService.start(context, id)
+            // end() before onStartCommand: the service must still call startForeground().
+            CallController.end(context, id)
+        }
+        Thread.sleep(3_000)
+        assertNull(CallForegroundService.foregroundCallId)
+        assertTrue(CallNotifier.manager(context).activeNotifications.none { it.notification.flags and Notification.FLAG_FOREGROUND_SERVICE != 0 })
+    }
+
+    @Test
+    fun declineIsDeliveredNativelyToTheDeclineEndpoint() {
+        java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { server ->
+            val request = AtomicReference<String>()
+            val serving = Thread {
+                server.accept().use { socket ->
+                    val input = socket.getInputStream().bufferedReader()
+                    val head = StringBuilder()
+                    var length = 0
+                    while (true) {
+                        val line = input.readLine() ?: break
+                        if (line.isEmpty()) break
+                        head.append(line).append('\n')
+                        if (line.startsWith("Content-Length:", true)) length = line.substringAfter(':').trim().toInt()
+                    }
+                    val body = CharArray(length).also { input.read(it, 0, length) }
+                    request.set(head.toString() + String(body))
+                    socket.getOutputStream().write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".toByteArray())
+                }
+            }.apply { start() }
+            call(
+                "showIncoming",
+                mapOf(
+                    "callId" to WireValue.Text("dec-1"),
+                    "name" to WireValue.Text("Ana"),
+                    "timeoutMillis" to WireValue.Integer(45_000),
+                    "declineUrl" to WireValue.Text("http://127.0.0.1:${server.localPort}/calls/dec-1/decline"),
+                    "declineToken" to WireValue.Text("one-time"),
+                ),
+            )
+            CallIntents.broadcast(context, "dec-1", CallIntents.ACTION_DECLINE).send()
+            val action = nextAction()
+            serving.join(5_000)
+            assertEquals(2L, kind(action))
+            assertTrue((action["serverNotified"] as WireValue.Flag).value)
+            val sent = request.get()
+            assertTrue(sent, sent.startsWith("POST /calls/dec-1/decline"))
+            assertTrue(sent, sent.contains("Authorization: Bearer one-time"))
+            assertEquals("dec-1", JSONObject(sent.substringAfter('{').let { "{$it" }).getString("call_id"))
+        }
+        // Without an endpoint the action is still queued, flagged as not delivered.
+        incoming("dec-2")
+        CallIntents.broadcast(context, "dec-2", CallIntents.ACTION_DECLINE).send()
+        assertFalse((nextAction()["serverNotified"] as WireValue.Flag).value)
+    }
+
+    @Test
+    fun incomingScreenKeepsActionsBelowTheCallerInLandscape() {
+        incoming("land-1")
+        val intent = Intent(context, IncomingCallActivity::class.java).putExtra(CallIntents.EXTRA_CALL_ID, "land-1")
+        ActivityScenario.launch<IncomingCallActivity>(intent).use { scenario ->
+            scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+            Thread.sleep(2_000)
+            instrumentation.waitForIdleSync()
+            scenario.onActivity { activity ->
+                val decor = activity.window.decorView
+                assertTrue(activity.resources.configuration.screenHeightDp < activity.resources.configuration.screenWidthDp)
+                val header = decor.findViewWithTag<View>(IncomingCallActivity.TAG_HEADER)
+                val accept = decor.findViewWithTag<View>(IncomingCallActivity.TAG_ACCEPT)
+                val headerAt = IntArray(2).also(header::getLocationInWindow)
+                val acceptAt = IntArray(2).also(accept::getLocationInWindow)
+                assertTrue("header ${headerAt[1]}+${header.height} overlaps accept ${acceptAt[1]}", headerAt[1] + header.height <= acceptAt[1])
+            }
+        }
+    }
+
+    @Test
+    fun pictureInPictureArmsEntersAndReportsTheHostMode() {
+        ActivityScenario.launch(PipHostActivity::class.java).use { scenario ->
+            Thread.sleep(500)
+            val supported = (call("readiness").values["pictureInPictureSupported"] as WireValue.Flag).value
+            val armed = call("pictureInPicture", mapOf("eligible" to WireValue.Flag(true), "width" to WireValue.Integer(9), "height" to WireValue.Integer(16)))
+            assertTrue(armed.message, armed.ok)
+            assertEquals(supported, (armed.values["available"] as WireValue.Flag).value)
+            if (!supported) return
+            val entered = call("enterPictureInPicture")
+            assertTrue((entered.values["entered"] as WireValue.Flag).value)
+            waitUntil(5_000) { CallPictureInPicture.isActive() }
+            assertTrue((call("nextPictureInPicture").values["active"] as WireValue.Flag).value)
+            scenario.onActivity { it.finish() }
+            assertTrue(call("pictureInPicture", mapOf("eligible" to WireValue.Flag(false))).ok)
+        }
     }
 
     @Test

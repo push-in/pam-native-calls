@@ -93,7 +93,8 @@ object CallNotifier {
 
     fun canPost(context: Context): Boolean = manager(context).areNotificationsEnabled()
 
-    fun buildIncoming(context: Context, call: CallInfo): Notification {
+    /** [update]: a repost of the ringing call (avatar arrived) that must not alert again. */
+    fun buildIncoming(context: Context, call: CallInfo, update: Boolean = false): Notification {
         ensureChannels(context)
         val avatar = cachedAvatar(call.avatar)
         val accept = CallIntents.activity(context, call.id, CallIntents.ACTION_ACCEPT)
@@ -115,8 +116,12 @@ object CallNotifier {
             .setContentIntent(CallIntents.activity(context, call.id, CallIntents.ACTION_OPEN))
             .setFullScreenIntent(fullScreen, true)
             .setDeleteIntent(CallIntents.broadcast(context, call.id, CallIntents.ACTION_TIMEOUT))
+            .setOnlyAlertOnce(update)
         // Android 7.x relies on CallController's in-process timeout alone.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) builder.setTimeoutAfter(call.timeoutMillis)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val elapsed = if (update) (System.currentTimeMillis() - call.ringingSince).coerceIn(0, call.timeoutMillis - 1_000) else 0
+            builder.setTimeoutAfter(call.timeoutMillis - elapsed)
+        }
         avatar?.let { builder.setLargeIcon(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setStyle(

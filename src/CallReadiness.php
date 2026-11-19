@@ -11,6 +11,8 @@ final readonly class CallReadiness
         public bool $notificationsEnabled,
         public bool $fullScreenIntentAllowed,
         public bool $callStyleSupported,
+        /** Android 8+ device with picture-in-picture (the host Activity must also declare it). */
+        public bool $pictureInPictureSupported = false,
     ) {
     }
 

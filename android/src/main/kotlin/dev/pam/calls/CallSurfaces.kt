@@ -13,7 +13,11 @@ class CallActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val callId = intent.getStringExtra(CallIntents.EXTRA_CALL_ID) ?: return
         when (intent.action) {
-            CallIntents.ACTION_DECLINE -> CallController.decline(context, callId)
+            CallIntents.ACTION_DECLINE -> {
+                // The decline endpoint request outlives onReceive (PHP may be suspended).
+                val pending = goAsync()
+                CallController.decline(context, callId) { pending.finish() }
+            }
             CallIntents.ACTION_HANG_UP -> CallController.hangUp(context, callId)
             CallIntents.ACTION_TIMEOUT -> CallController.timeout(context, callId)
         }
@@ -88,6 +92,7 @@ object PushCallMatcher {
             val video = videoField.isNotEmpty() && data.text(videoField)?.lowercase() in mapping.strings("videoValues").map { it.lowercase() }
             val field = { key: String -> mapping.optString(key).takeIf { it.isNotEmpty() }?.let { data.text(it) }.orEmpty() }
             val dataJson = JSONObject().apply { data.keys().forEach { key -> put(key, data.opt(key)) } }.toString()
+            val declineUrl = field("declineUrlField").take(2048).takeIf(CallDeclineEndpoint::accepts).orEmpty()
             return Match.Incoming(
                 CallInfo(
                     id = callId,
@@ -100,6 +105,8 @@ object PushCallMatcher {
                     timeoutMillis = mapping.optLong("timeoutMillis", 45_000).coerceIn(5_000, 300_000),
                     acceptLabel = mapping.optString("acceptLabel"),
                     declineLabel = mapping.optString("declineLabel"),
+                    declineUrl = declineUrl,
+                    declineToken = if (declineUrl.isEmpty()) "" else field("declineTokenField").take(4096),
                 ),
             )
         }

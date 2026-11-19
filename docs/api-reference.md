@@ -20,6 +20,9 @@ All classes live in `Pam\Native\Calls`.
 | `readiness(Closure $done): void` | `Closure(CallReadiness): void`. Failures report all fields as `false`. |
 | `voipToken(Closure $done): void` | `Closure(?string): void`; hex PushKit token on iOS, `null` on Android. |
 | `openFullScreenSettings(): void` | Opens the full-screen-intent (or notification) settings. |
+| `pictureInPicture(bool $eligible, int $width = 9, int $height = 16, ?Closure $done = null): void` | Android: arms (or disarms) picture-in-picture of the host Activity; on Android 12+ leaving the app enters it by itself. `$done(bool $available)`. No-op on iOS. |
+| `enterPictureInPicture(?Closure $done = null): void` | Android 8+: enters picture-in-picture now. `$done(bool $entered)`. |
+| `onPictureInPicture(Closure $listener): int` / `offPictureInPicture(int $listener): void` | `Closure(bool $active): void` on every picture-in-picture change of the host Activity. |
 | `MODULE` | `'calls'`, the native module name. |
 
 `dispatch()`, `reset()`, `send()`, `validId()`, `text()` and `avatar()` are
@@ -36,6 +39,7 @@ All classes live in `Pam\Native\Calls`.
 | `subtitle(string $subtitle)` | ≤ 256 characters. |
 | `deepLink(string $url)` | ≤ 2048 characters. Opened on Accept/Open and routed by the core deep-link handling. |
 | `labels(string $accept, string $decline)` | ≤ 64 characters each. |
+| `declineEndpoint(string $url, string $token = '')` | Decline natively: `POST $url` with `{"call_id", "action": "decline"}` and `Authorization: Bearer $token`, PHP suspended or not. `http(s)` URL ≤ 2048. |
 | `data(array $data)` | String-keyed scalar map, returned in every `CallAction`. |
 | `show(?Closure $done = null): self` | Sends the call. `$done(bool $ok, string $error)`. |
 | `toWire(): array` | Wire payload (used by `show()`). |
@@ -62,6 +66,7 @@ fall back to the values of the incoming call with the same id.
 | `subtitle(string $field)`, `deepLink(string $field)` | Optional fields. |
 | `timeout(int $seconds)` | 5–300, default 45. |
 | `labels(string $accept, string $decline)` | Button labels. |
+| `declineEndpoint(string $urlField, ?string $tokenField = null)` | Push fields with the decline URL and a short-lived bearer token; Decline posts there natively. |
 | `toArray(): array` | Persisted form. |
 
 Field names must match `[A-Za-z0-9_.-]{1,64}`.
@@ -70,12 +75,15 @@ Field names must match `[A-Za-z0-9_.-]{1,64}`.
 
 `kind: CallActionKind`, `callId: string`, `video: bool`, `deepLink: string`,
 `data: array` (the `IncomingCall::data()` map, or the push data for
-push-driven calls), `atMillis: int` (when the action happened, Unix ms).
+push-driven calls), `atMillis: int` (when the action happened, Unix ms),
+`serverNotified: bool` (Decline only: the plugin already delivered it to the
+decline endpoint with a 2xx, so the app does not need to send it again).
 `fromWire(array $values): ?self` decodes a native record.
 
 ### `CallReadiness` (readonly)
 
 `notificationsEnabled`, `fullScreenIntentAllowed`, `callStyleSupported`,
+`pictureInPictureSupported` (Android 8+ device with picture-in-picture),
 `canRing(): bool`.
 
 ### `CallActionKind` (int enum)

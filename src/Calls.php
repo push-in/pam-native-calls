@@ -23,6 +23,10 @@ final class Calls
     private static int $nextListener = 1;
     private static bool $listening = false;
 
+    /** @var array<int, Closure(bool): void> */
+    private static array $pipListeners = [];
+    private static bool $pipListening = false;
+
     private function __construct()
     {
     }
@@ -91,6 +95,7 @@ final class Calls
                 (bool) ($values['notificationsEnabled'] ?? false),
                 (bool) ($values['fullScreenIntentAllowed'] ?? false),
                 (bool) ($values['callStyleSupported'] ?? false),
+                (bool) ($values['pictureInPictureSupported'] ?? false),
             ));
         });
     }
@@ -107,6 +112,60 @@ final class Calls
             $token = $result->succeeded() ? ($result->values()['token'] ?? null) : null;
             $done(is_string($token) && $token !== '' ? $token : null);
         });
+    }
+
+    /**
+     * Android: arms picture-in-picture for the in-call screen, e.g. while a
+     * video call shows remote video. On Android 12+ leaving the app then
+     * shrinks it into a floating window by itself; disarm it when the call
+     * ends or video stops (the plugin also disarms once no call is left).
+     * `$width`/`$height` is the window aspect ratio. `$done` receives whether
+     * the host Activity can enter picture-in-picture (Android 8+, device
+     * support, `supportsPictureInPicture` declared). No-op on iOS.
+     *
+     * @param (Closure(bool): void)|null $done
+     */
+    public static function pictureInPicture(bool $eligible, int $width = 9, int $height = 16, ?Closure $done = null): void
+    {
+        NativeModules::call(self::MODULE, 'pictureInPicture', ['eligible' => $eligible, 'width' => max(1, $width), 'height' => max(1, $height)], static function (NativeModuleResult $result) use ($done): void {
+            $done?->__invoke($result->succeeded() && (bool) ($result->values()['available'] ?? false));
+        });
+    }
+
+    /**
+     * Android 8+: enters picture-in-picture now (a "minimize" button; below
+     * Android 12 the only way in). `$done` receives whether it entered.
+     *
+     * @param (Closure(bool): void)|null $done
+     */
+    public static function enterPictureInPicture(?Closure $done = null): void
+    {
+        NativeModules::call(self::MODULE, 'enterPictureInPicture', [], static function (NativeModuleResult $result) use ($done): void {
+            $done?->__invoke($result->succeeded() && (bool) ($result->values()['entered'] ?? false));
+        });
+    }
+
+    /**
+     * Listens for picture-in-picture changes of the host Activity (true while
+     * the app is the floating window: hide the call controls).
+     *
+     * @param Closure(bool): void $listener
+     */
+    public static function onPictureInPicture(Closure $listener): int
+    {
+        $id = self::$nextListener++;
+        self::$pipListeners[$id] = $listener;
+        if (!self::$pipListening) {
+            self::$pipListening = true;
+            self::listenPictureInPicture();
+        }
+
+        return $id;
+    }
+
+    public static function offPictureInPicture(int $listener): void
+    {
+        unset(self::$pipListeners[$listener]);
     }
 
     /** Opens the Android 14+ "full screen notifications" setting (notification settings on older versions). */
@@ -128,6 +187,8 @@ final class Calls
     {
         self::$listeners = [];
         self::$listening = false;
+        self::$pipListeners = [];
+        self::$pipListening = false;
     }
 
     /**
@@ -177,6 +238,36 @@ final class Calls
         }
 
         return $avatar;
+    }
+
+    /** @internal */
+    public static function endpoint(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (strlen($url) > 2048 || preg_match('#^https?://[^\s/]+#i', $url) !== 1) {
+            throw new InvalidArgumentException('Decline endpoints must be absolute http(s) URLs (max 2048).');
+        }
+
+        return $url;
+    }
+
+    private static function listenPictureInPicture(): void
+    {
+        NativeModules::call(self::MODULE, 'nextPictureInPicture', [], static function (NativeModuleResult $result): void {
+            if (!$result->succeeded() || self::$pipListeners === []) {
+                self::$pipListening = false;
+
+                return;
+            }
+            $active = (bool) ($result->values()['active'] ?? false);
+            foreach (self::$pipListeners as $listener) {
+                $listener($active);
+            }
+            self::listenPictureInPicture();
+        });
     }
 
     private static function listen(): void

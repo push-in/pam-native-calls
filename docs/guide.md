@@ -55,6 +55,56 @@ delivered once to every registered listener. Actions taken while the process
 was dead are delivered after the next launch, as soon as a listener is
 registered, so register at boot.
 
+### Declining while PHP is suspended
+
+A Decline tapped on the notification or the lock-screen UI while the PHP
+runtime is suspended (or the process was only woken by the push) reaches PHP
+when the runtime resumes, which can be long after the caller should have
+stopped ringing. Give the call a decline endpoint and the plugin tells the
+server itself:
+
+```php
+IncomingCall::make($callId)->caller($name)->declineEndpoint("https://api.example.com/calls/{$callId}/decline", $declineToken)->show();
+// push-driven calls: fields of the push data
+PushCallMapping::type('call')->declineEndpoint('decline_url', 'decline_token');
+```
+
+On Decline the plugin sends `POST <url>` with `{"call_id": "...", "action":
+"decline"}` and `Authorization: Bearer <token>` (Android: inside the
+notification broadcast; iOS: inside a background task after CallKit's end
+action), then queues the `Decline` action with `serverNotified` true when the
+server answered 2xx. Issue a short-lived token valid only for that call and
+that action. When `serverNotified` is true the app skips its own request.
+
+## Lock screen
+
+Accepting from the lock screen keeps the app's activities visible over the
+keyguard (and turns the screen on) while the call is accepted or ongoing. Apps
+usually remove the ringing surfaces on accept (`Calls::end()`) and publish the
+ongoing call once media connects: the accepted call keeps the app over the lock
+screen for 30 s after the acceptance for that gap, and `showOngoing()` keeps it
+until the call ends. Publish `Calls::ongoing()` as soon as the call is
+connecting so a slow connection does not drop behind the keyguard; ending
+another call never releases the accepted one.
+
+## Picture-in-picture (Android)
+
+```php
+// Video call with remote video on screen: arm it (Android 12+ enters on Home/Recents).
+Calls::pictureInPicture(true, 9, 16);
+// A "minimize" button (Android 8+; the only way in below Android 12).
+Calls::enterPictureInPicture();
+// Hide the call controls while the app is the floating window.
+Calls::onPictureInPicture(fn (bool $active) => $this->compact = $active);
+// Video stopped or the call ended (the plugin also disarms once no call is left).
+Calls::pictureInPicture(false);
+```
+
+The host Activity (PamActivity) must declare
+`android:supportsPictureInPicture="true"`; PamActivity already handles size
+changes in place. `CallReadiness::$pictureInPictureSupported` tells whether the
+device supports it. iOS: not available (CallKit owns the system call UI).
+
 ## Ongoing call
 
 ```php

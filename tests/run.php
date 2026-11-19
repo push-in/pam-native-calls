@@ -190,6 +190,101 @@ $test('android surfaces use CallStyle, full-screen intents and a camera|micropho
     $check(in_array('android.permission.USE_FULL_SCREEN_INTENT', $plugin['android']['permissions'], true), 'permission');
 });
 
+$test('decline endpoints travel with incoming calls and push mappings', static function () use ($check, $throws): void {
+    $transport = NativeTestHarness::install();
+    $transport->succeed('calls', 'showIncoming')->succeed('calls', 'configurePush');
+    Calls::incoming(IncomingCall::make('c9')->caller('Ana')->declineEndpoint('https://api.example.com/calls/c9/decline', 'tok-1'))->show();
+    $payload = Wire::decodeMap($transport->lastCall()->payload);
+    $check($payload['declineUrl'] === 'https://api.example.com/calls/c9/decline' && $payload['declineToken'] === 'tok-1', 'incoming endpoint');
+    $plain = IncomingCall::make('c9')->caller('Ana')->toWire();
+    $check($plain['declineUrl'] === '' && $plain['declineToken'] === '', 'no endpoint by default');
+    Calls::fromPush(PushCallMapping::type('call')->declineEndpoint('decline_url', 'decline_token'));
+    $mapping = json_decode(Wire::decodeMap($transport->lastCall()->payload)['mappingsJson'], true)[0];
+    $check($mapping['declineUrlField'] === 'decline_url' && $mapping['declineTokenField'] === 'decline_token', 'mapping fields');
+    $check(PushCallMapping::type('call')->toArray()['declineUrlField'] === '', 'mapping default');
+    $throws(InvalidArgumentException::class, static fn () => IncomingCall::make('c9')->declineEndpoint('ftp://x/decline'));
+    $throws(InvalidArgumentException::class, static fn () => IncomingCall::make('c9')->declineEndpoint('/relative'));
+    $throws(InvalidArgumentException::class, static fn () => PushCallMapping::type('call')->declineEndpoint('bad field'));
+    NativeTestHarness::uninstall();
+});
+
+$test('decline actions report whether the server was notified natively', static function () use ($check): void {
+    $notified = CallAction::fromWire(['kind' => 2, 'callId' => 'c1', 'serverNotified' => true]);
+    $legacy = CallAction::fromWire(['kind' => 2, 'callId' => 'c1']);
+    $check($notified?->serverNotified === true && $legacy?->serverNotified === false, 'serverNotified');
+});
+
+$test('picture-in-picture arms the host, enters on demand and reports mode changes', static function () use ($check): void {
+    Calls::reset();
+    $transport = NativeTestHarness::install();
+    $transport->succeed('calls', 'pictureInPicture', ['available' => true])
+        ->succeed('calls', 'enterPictureInPicture', ['entered' => true])
+        ->succeed('calls', 'nextPictureInPicture', ['active' => true], DispatchMode::Deferred)
+        ->succeed('calls', 'nextPictureInPicture', ['active' => false], DispatchMode::Deferred)
+        ->succeed('calls', 'nextPictureInPicture', [], DispatchMode::Deferred);
+    $available = null;
+    Calls::pictureInPicture(true, 16, 9, static function (bool $value) use (&$available): void {
+        $available = $value;
+    });
+    $armed = Wire::decodeMap($transport->lastCall()->payload);
+    $check($available === true && $armed['eligible'] === true && $armed['width'] === 16 && $armed['height'] === 9, 'arm '.json_encode($armed));
+    $entered = null;
+    Calls::enterPictureInPicture(static function (bool $value) use (&$entered): void {
+        $entered = $value;
+    });
+    $check($entered === true, 'enter');
+    $modes = [];
+    $listener = Calls::onPictureInPicture(static function (bool $active) use (&$modes): void {
+        $modes[] = $active;
+    });
+    $transport->flushOne();
+    $transport->flushOne();
+    $check($modes === [true, false], 'modes');
+    $transport->assertCalled('calls', 'nextPictureInPicture', 3);
+    Calls::offPictureInPicture($listener);
+    Calls::reset();
+    NativeTestHarness::uninstall();
+});
+
+$test('readiness reports picture-in-picture support', static function () use ($check): void {
+    $transport = NativeTestHarness::install();
+    $transport->succeed('calls', 'readiness', ['notificationsEnabled' => true, 'fullScreenIntentAllowed' => true, 'callStyleSupported' => true, 'pictureInPictureSupported' => true]);
+    $readiness = null;
+    Calls::readiness(static function (CallReadiness $value) use (&$readiness): void {
+        $readiness = $value;
+    });
+    $check($readiness?->pictureInPictureSupported === true, 'pip');
+    NativeTestHarness::uninstall();
+});
+
+$test('the IDL describes every wire field', static function () use ($check): void {
+    $idl = json_decode((string) file_get_contents(dirname(__DIR__).'/pam-native.idl.json'), true, flags: JSON_THROW_ON_ERROR);
+    $incoming = array_keys(IncomingCall::make('c1')->caller('Ana')->toWire());
+    $check(array_diff($incoming, array_keys($idl['records']['IncomingCall'])) === [], 'IncomingCall');
+    $check(isset($idl['records']['CallAction']['serverNotified'], $idl['records']['CallReadiness']['pictureInPictureSupported']), 'records');
+});
+
+$test('android keeps the startForegroundService contract and rings before the avatar', static function () use ($check): void {
+    $root = dirname(__DIR__).'/android/src/main/kotlin/dev/pam/calls';
+    $service = (string) file_get_contents($root.'/CallForegroundService.kt');
+    $controller = (string) file_get_contents($root.'/CallController.kt');
+    $check(str_contains($service, 'retire(') && str_contains($service, 'STOP_FOREGROUND_REMOVE'), 'retire with startForeground');
+    $incoming = substr($controller, (int) strpos($controller, 'fun showIncoming'), 2000);
+    $check(strpos($incoming, '.notify(') < strpos($incoming, 'loadAvatar'), 'notify before avatar download');
+    $check(str_contains($controller, 'LockScreenPolicy.refresh(app)') && str_contains($controller, 'ACCEPT_GRACE_MILLIS'), 'lock screen');
+});
+
+$test('android strings are translated for every shipped locale', static function () use ($check): void {
+    $res = dirname(__DIR__).'/android/src/main/res';
+    preg_match_all('/name="([a-z_]+)"/', (string) file_get_contents($res.'/values/strings.xml'), $base);
+    foreach (['values-pt', 'values-es', 'values-fr'] as $locale) {
+        $xml = (string) file_get_contents($res.'/'.$locale.'/strings.xml');
+        preg_match_all('/name="([a-z_]+)"/', $xml, $names);
+        $check($names[1] === $base[1], $locale.' keys');
+        $check(simplexml_load_string($xml) !== false, $locale.' xml');
+    }
+});
+
 $failed = 0;
 foreach ($tests as $name => $body) {
     try {
